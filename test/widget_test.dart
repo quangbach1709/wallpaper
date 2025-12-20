@@ -5,16 +5,17 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:wallpaper/main.dart';
 
 void main() {
-  testWidgets('App loads gallery page', (WidgetTester tester) async {
+  testWidgets('App loads correctly', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const BingWallpaperApp());
+    await tester.pumpWidget(const WallpaperApp());
 
-    // Verify that the app title is displayed
-    expect(find.text('Bing Wallpapers'), findsOneWidget);
+    // Verify that the app title is displayed.
+    expect(find.text('Trending Wallpapers'), findsOneWidget);
   });
 }

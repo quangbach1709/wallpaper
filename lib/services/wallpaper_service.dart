@@ -3,71 +3,195 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wallpaper_manager_flutter/wallpaper_manager_flutter.dart';
+
+/// Unsplash API Configuration
+const String unsplashAccessKey = '8j6bFdAOUOn4PI-ABF169gGccTlH_p-Uu4SIHUt7tfc';
+const String _unsplashBaseUrl = 'https://api.unsplash.com';
+
+/// Cache Configuration
+const String _cacheKeyWallpapers = 'cached_wallpapers_json';
+const String _cacheKeyTimestamp = 'cached_wallpapers_timestamp';
+const int _cacheDurationMinutes = 60; // 60 minutes cache validity
 
 /// Enum for wallpaper location options
 enum WallpaperLocation { homeScreen, lockScreen, both }
 
-/// Model class representing a Bing image
-class BingImage {
-  final String url;
-  final String title;
-  final String copyright;
-  final String startDate;
+/// Model class representing an Unsplash image
+class UnsplashImage {
+  final String id;
+  final String regularUrl;
+  final String fullUrl;
+  final String thumbUrl;
+  final String? description;
+  final String photographerName;
+  final int width;
+  final int height;
 
-  BingImage({
-    required this.url,
-    required this.title,
-    required this.copyright,
-    required this.startDate,
+  UnsplashImage({
+    required this.id,
+    required this.regularUrl,
+    required this.fullUrl,
+    required this.thumbUrl,
+    this.description,
+    required this.photographerName,
+    required this.width,
+    required this.height,
   });
 
-  factory BingImage.fromJson(Map<String, dynamic> json) {
-    // Construct full URL from the relative path
-    final String urlPath = json['url'] ?? '';
-    final String fullUrl = 'https://www.bing.com$urlPath';
+  factory UnsplashImage.fromJson(Map<String, dynamic> json) {
+    final urls = json['urls'] as Map<String, dynamic>;
+    final user = json['user'] as Map<String, dynamic>;
 
-    return BingImage(
-      url: fullUrl,
-      title: json['title'] ?? '',
-      copyright: json['copyright'] ?? '',
-      startDate: json['startdate'] ?? '',
+    return UnsplashImage(
+      id: json['id'] ?? '',
+      regularUrl: urls['regular'] ?? '',
+      fullUrl: urls['full'] ?? '',
+      thumbUrl: urls['thumb'] ?? '',
+      description: json['description'] ?? json['alt_description'],
+      photographerName: user['name'] ?? 'Unknown',
+      width: json['width'] ?? 0,
+      height: json['height'] ?? 0,
     );
   }
+
+  /// Convert to JSON for caching
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'urls': {'regular': regularUrl, 'full': fullUrl, 'thumb': thumbUrl},
+    'description': description,
+    'user': {'name': photographerName},
+    'width': width,
+    'height': height,
+  };
+
+  /// Get display title (description or photographer credit)
+  String get displayTitle => description ?? 'Photo by $photographerName';
 }
 
-/// Service class for handling wallpaper operations
+/// Service class for handling wallpaper operations with Unsplash API
 class WallpaperService {
-  static const String _bingApiBaseUrl =
-      'https://www.bing.com/HPImageArchive.aspx';
+  /// Common headers for Unsplash API
+  static Map<String, String> get _headers => {
+    'Authorization': 'Client-ID $unsplashAccessKey',
+    'Accept-Version': 'v1',
+  };
 
-  /// Fetches Bing images from the API
-  /// [count] - Number of images to fetch (1-8)
-  static Future<List<BingImage>> fetchBingImages({int count = 1}) async {
+  /// Check if cache is valid (less than 60 minutes old)
+  static Future<bool> _isCacheValid() async {
+    final prefs = await SharedPreferences.getInstance();
+    final timestampStr = prefs.getString(_cacheKeyTimestamp);
+
+    if (timestampStr == null) return false;
+
+    final cachedTime = DateTime.tryParse(timestampStr);
+    if (cachedTime == null) return false;
+
+    final difference = DateTime.now().difference(cachedTime);
+    return difference.inMinutes < _cacheDurationMinutes;
+  }
+
+  /// Get cached wallpapers from SharedPreferences
+  static Future<List<UnsplashImage>?> _getCachedWallpapers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cachedJson = prefs.getString(_cacheKeyWallpapers);
+
+    if (cachedJson == null) return null;
+
+    try {
+      final List<dynamic> data = json.decode(cachedJson);
+      return data.map((json) => UnsplashImage.fromJson(json)).toList();
+    } catch (e) {
+      // Invalid cache, return null
+      return null;
+    }
+  }
+
+  /// Save wallpapers to cache
+  static Future<void> _cacheWallpapers(String jsonResponse) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_cacheKeyWallpapers, jsonResponse);
+    await prefs.setString(_cacheKeyTimestamp, DateTime.now().toIso8601String());
+  }
+
+  /// Fetches trending portrait wallpapers for the gallery
+  /// [count] - Number of images to fetch (default 30)
+  /// [forceRefresh] - If true, bypass cache and fetch fresh data
+  static Future<List<UnsplashImage>> fetchTrendingWallpapers({
+    int count = 30,
+    bool forceRefresh = false,
+  }) async {
+    // Step 1: Check cache (unless force refresh)
+    if (!forceRefresh) {
+      final isValid = await _isCacheValid();
+      if (isValid) {
+        final cached = await _getCachedWallpapers();
+        if (cached != null && cached.isNotEmpty) {
+          // Cache hit - return cached data
+          return cached;
+        }
+      }
+    }
+
+    // Step 2: Cache miss or force refresh - fetch from API
     try {
       final uri = Uri.parse(
-        '$_bingApiBaseUrl?format=js&idx=0&n=$count&mkt=en-US',
+        '$_unsplashBaseUrl/photos?per_page=$count&order_by=popular&orientation=portrait',
       );
 
-      final response = await http.get(uri);
+      final response = await http.get(uri, headers: _headers);
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-        final List<dynamic> images = data['images'] ?? [];
+        // Save to cache
+        await _cacheWallpapers(response.body);
 
-        return images
-            .map((imageJson) => BingImage.fromJson(imageJson))
-            .toList();
+        final List<dynamic> data = json.decode(response.body);
+        return data.map((json) => UnsplashImage.fromJson(json)).toList();
       } else {
-        throw Exception('Failed to fetch Bing images: ${response.statusCode}');
+        throw Exception(
+          'Failed to fetch wallpapers: ${response.statusCode} - ${response.body}',
+        );
       }
     } catch (e) {
-      throw Exception('Error fetching Bing images: $e');
+      // On error, try to return cached data as fallback
+      final cached = await _getCachedWallpapers();
+      if (cached != null && cached.isNotEmpty) {
+        return cached;
+      }
+      throw Exception('Error fetching wallpapers: $e');
+    }
+  }
+
+  /// Fetches a random portrait wallpaper for background task
+  static Future<UnsplashImage> fetchRandomWallpaper() async {
+    try {
+      final uri = Uri.parse(
+        '$_unsplashBaseUrl/photos/random?orientation=portrait&query=nature,architecture,abstract&count=1',
+      );
+
+      final response = await http.get(uri, headers: _headers);
+
+      if (response.statusCode == 200) {
+        final dynamic data = json.decode(response.body);
+        // Response is an array when count=1
+        if (data is List && data.isNotEmpty) {
+          return UnsplashImage.fromJson(data.first);
+        } else if (data is Map<String, dynamic>) {
+          return UnsplashImage.fromJson(data);
+        }
+        throw Exception('Invalid response format');
+      } else {
+        throw Exception(
+          'Failed to fetch random wallpaper: ${response.statusCode}',
+        );
+      }
+    } catch (e) {
+      throw Exception('Error fetching random wallpaper: $e');
     }
   }
 
   /// Downloads an image to the temporary directory
-  /// Returns the file path of the downloaded image
   static Future<String> downloadImage(String imageUrl) async {
     try {
       final response = await http.get(Uri.parse(imageUrl));
@@ -75,7 +199,7 @@ class WallpaperService {
       if (response.statusCode == 200) {
         final tempDir = await getTemporaryDirectory();
         final fileName =
-            'bing_wallpaper_${DateTime.now().millisecondsSinceEpoch}.jpg';
+            'wallpaper_${DateTime.now().millisecondsSinceEpoch}.jpg';
         final filePath = '${tempDir.path}/$fileName';
 
         final file = File(filePath);
@@ -98,8 +222,6 @@ class WallpaperService {
         await file.delete();
       }
     } catch (e) {
-      // Silently fail - cleanup is best effort
-      // ignore: avoid_print
       print('Error deleting file: $e');
     }
   }
@@ -112,7 +234,6 @@ class WallpaperService {
   }
 
   /// Sets wallpaper from a file path to specified location(s)
-  /// [location] - Where to set the wallpaper (home, lock, or both)
   static Future<bool> setWallpaper(
     String filePath, {
     WallpaperLocation location = WallpaperLocation.homeScreen,
@@ -133,7 +254,6 @@ class WallpaperService {
             WallpaperManagerFlutter.lockScreen,
           );
         case WallpaperLocation.both:
-          // Set for both screens
           final homeResult = await wallpaperManager.setWallpaper(
             file,
             WallpaperManagerFlutter.homeScreen,
@@ -150,7 +270,6 @@ class WallpaperService {
   }
 
   /// Complete flow: Download -> Set Wallpaper -> Delete temp file
-  /// Used for background tasks (sets BOTH screens)
   static Future<bool> setWallpaperFromUrl(
     String imageUrl, {
     WallpaperLocation location = WallpaperLocation.both,
@@ -158,17 +277,12 @@ class WallpaperService {
     String? filePath;
 
     try {
-      // Step 1: Download image to temp directory
       filePath = await downloadImage(imageUrl);
-
-      // Step 2: Set as wallpaper
       final result = await setWallpaper(filePath, location: location);
-
       return result;
     } catch (e) {
       rethrow;
     } finally {
-      // Step 3: ALWAYS delete the temp file (crucial for storage management)
       if (filePath != null) {
         await deleteFile(filePath);
       }
@@ -176,44 +290,31 @@ class WallpaperService {
   }
 
   /// Sets wallpaper from a local file path with cleanup
-  /// Used for manual selection with cropped image
   static Future<bool> setWallpaperFromFile(
     String filePath, {
     required WallpaperLocation location,
     List<String> filesToCleanup = const [],
   }) async {
     try {
-      // Set as wallpaper
       final result = await setWallpaper(filePath, location: location);
       return result;
     } catch (e) {
       rethrow;
     } finally {
-      // ALWAYS cleanup all temp files
       await deleteFiles(filesToCleanup);
     }
   }
 
   /// Background task entry point for WorkManager
-  /// Fetches today's Bing image and sets it as wallpaper for BOTH screens
   static Future<bool> executeBackgroundTask() async {
     try {
-      // Fetch the latest Bing image (just 1)
-      final images = await fetchBingImages(count: 1);
-
-      if (images.isEmpty) {
-        throw Exception('No images returned from Bing API');
-      }
-
-      // Set the wallpaper for BOTH home and lock screens
+      final image = await fetchRandomWallpaper();
       final result = await setWallpaperFromUrl(
-        images.first.url,
+        image.fullUrl,
         location: WallpaperLocation.both,
       );
-
       return result;
     } catch (e) {
-      // ignore: avoid_print
       print('Background task failed: $e');
       return false;
     }

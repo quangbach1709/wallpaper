@@ -10,10 +10,10 @@ import 'services/wallpaper_service.dart';
 const String dailyWallpaperTask = 'dailyWallpaperTask';
 
 /// Custom cache manager with strict limits to prevent app bloating
-class BingImageCacheManager {
-  static const key = 'bingImageCache';
+class WallpaperCacheManager {
+  static const key = 'unsplashWallpaperCache';
   static CacheManager instance = CacheManager(
-    Config(key, stalePeriod: const Duration(days: 2), maxNrOfCacheObjects: 10),
+    Config(key, stalePeriod: const Duration(days: 2), maxNrOfCacheObjects: 50),
   );
 }
 
@@ -23,7 +23,7 @@ void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     switch (task) {
       case dailyWallpaperTask:
-        // Background task sets wallpaper for BOTH screens
+        // Background task sets wallpaper for BOTH screens using Unsplash
         return await WallpaperService.executeBackgroundTask();
       default:
         return Future.value(true);
@@ -60,16 +60,16 @@ void main() async {
     existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
   );
 
-  runApp(const BingWallpaperApp());
+  runApp(const WallpaperApp());
 }
 
-class BingWallpaperApp extends StatelessWidget {
-  const BingWallpaperApp({super.key});
+class WallpaperApp extends StatelessWidget {
+  const WallpaperApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Bing Wallpaper',
+      title: 'Wallpaper',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -97,7 +97,7 @@ class WallpaperGalleryPage extends StatefulWidget {
 }
 
 class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
-  List<BingImage> _images = [];
+  List<UnsplashImage> _images = [];
   bool _isLoading = true;
   bool _isProcessing = false;
   String? _error;
@@ -108,14 +108,17 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     _fetchImages();
   }
 
-  Future<void> _fetchImages() async {
+  Future<void> _fetchImages({bool forceRefresh = false}) async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      final images = await WallpaperService.fetchBingImages(count: 8);
+      final images = await WallpaperService.fetchTrendingWallpapers(
+        count: 30,
+        forceRefresh: forceRefresh,
+      );
       setState(() {
         _images = images;
         _isLoading = false;
@@ -128,8 +131,13 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     }
   }
 
+  /// Force refresh for pull-to-refresh
+  Future<void> _onRefresh() async {
+    await _fetchImages(forceRefresh: true);
+  }
+
   /// Handle image tap: Download -> Crop -> Show Options
-  Future<void> _handleImageTap(BingImage image) async {
+  Future<void> _handleImageTap(UnsplashImage image) async {
     if (_isProcessing) return;
 
     setState(() => _isProcessing = true);
@@ -137,9 +145,9 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     String? croppedFilePath;
 
     try {
-      // Step 1: Download image to temp
+      // Step 1: Download image to temp (use regular for faster download)
       _showLoadingDialog('Downloading image...');
-      originalFilePath = await WallpaperService.downloadImage(image.url);
+      originalFilePath = await WallpaperService.downloadImage(image.regularUrl);
       if (!mounted) return;
       Navigator.pop(context); // Close loading dialog
 
@@ -157,7 +165,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
         ),
         uiSettings: [
           AndroidUiSettings(
-            toolbarTitle: 'Crop Wallpaper',
+            toolbarTitle: 'Adjust Wallpaper',
             toolbarColor: const Color(0xFF1A1A3E),
             toolbarWidgetColor: Colors.white,
             backgroundColor: const Color(0xFF0F0F23),
@@ -236,7 +244,12 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             children: [
               const CircularProgressIndicator(color: Color(0xFF6366F1)),
               const SizedBox(width: 20),
-              Text(message, style: const TextStyle(color: Colors.white)),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(color: Colors.white),
+                ),
+              ),
             ],
           ),
         ),
@@ -346,7 +359,6 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   }
 
   void _showResultSnackBar(bool success) {
-    // Add small delay to let the layout stabilize after returning from cropper
     Future.delayed(const Duration(milliseconds: 100), () {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -364,7 +376,6 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   }
 
   void _showErrorSnackBar(String error) {
-    // Add small delay to let the layout stabilize
     Future.delayed(const Duration(milliseconds: 100), () {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -383,8 +394,8 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text(
-          'Bing Wallpapers',
-          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 24),
+          'Trending Wallpapers',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 22),
         ),
         actions: [
           IconButton(
@@ -416,7 +427,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             CircularProgressIndicator(strokeWidth: 3),
             SizedBox(height: 16),
             Text(
-              'Loading beautiful images...',
+              'Loading trending wallpapers...',
               style: TextStyle(color: Colors.white70, fontSize: 16),
             ),
           ],
@@ -438,7 +449,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Failed to load images',
+                'Failed to load wallpapers',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 8),
@@ -463,32 +474,72 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Text(
-            'Recent ${_images.length} days • Tap to crop & set',
-            style: const TextStyle(color: Colors.white60, fontSize: 14),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.trending_up,
+                      size: 16,
+                      color: Color(0xFF6366F1),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${_images.length} Popular',
+                      style: const TextStyle(
+                        color: Color(0xFF6366F1),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              const Text(
+                'Pull down to refresh',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+            ],
           ),
         ),
         Expanded(
-          child: GridView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 0.7,
+          child: RefreshIndicator(
+            onRefresh: _onRefresh,
+            color: const Color(0xFF6366F1),
+            backgroundColor: const Color(0xFF1A1A3E),
+            child: GridView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: 10,
+                mainAxisSpacing: 10,
+                childAspectRatio: 0.6, // Portrait aspect ratio for tall images
+              ),
+              itemCount: _images.length,
+              itemBuilder: (context, index) {
+                return _buildImageCard(_images[index]);
+              },
             ),
-            itemCount: _images.length,
-            itemBuilder: (context, index) {
-              return _buildImageCard(_images[index]);
-            },
           ),
         ),
       ],
     );
   }
 
-  Widget _buildImageCard(BingImage image) {
+  Widget _buildImageCard(UnsplashImage image) {
     return GestureDetector(
       onTap: () => _handleImageTap(image),
       child: Container(
@@ -508,8 +559,8 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             fit: StackFit.expand,
             children: [
               CachedNetworkImage(
-                imageUrl: image.url,
-                cacheManager: BingImageCacheManager.instance,
+                imageUrl: image.thumbUrl,
+                cacheManager: WallpaperCacheManager.instance,
                 fit: BoxFit.cover,
                 placeholder: (context, url) => Container(
                   color: Colors.grey[900],
@@ -542,14 +593,14 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
                       ],
                     ),
                   ),
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   child: Text(
-                    image.title,
-                    maxLines: 2,
+                    image.photographerName,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
+                      color: Colors.white70,
+                      fontSize: 11,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
