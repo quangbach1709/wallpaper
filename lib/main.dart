@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:image_cropper/image_cropper.dart';
 
 import 'services/wallpaper_service.dart';
 
@@ -22,6 +23,7 @@ void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     switch (task) {
       case dailyWallpaperTask:
+        // Background task sets wallpaper for BOTH screens
         return await WallpaperService.executeBackgroundTask();
       default:
         return Future.value(true);
@@ -97,6 +99,7 @@ class WallpaperGalleryPage extends StatefulWidget {
 class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   List<BingImage> _images = [];
   bool _isLoading = true;
+  bool _isProcessing = false;
   String? _error;
 
   @override
@@ -125,13 +128,253 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     }
   }
 
-  void _showImagePreview(BingImage image) {
-    showModalBottomSheet(
+  /// Handle image tap: Download -> Crop -> Show Options
+  Future<void> _handleImageTap(BingImage image) async {
+    if (_isProcessing) return;
+
+    setState(() => _isProcessing = true);
+    String? originalFilePath;
+    String? croppedFilePath;
+
+    try {
+      // Step 1: Download image to temp
+      _showLoadingDialog('Downloading image...');
+      originalFilePath = await WallpaperService.downloadImage(image.url);
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+
+      // Step 2: Get device screen ratio for cropper
+      final screenSize = MediaQuery.of(context).size;
+      final aspectRatioX = screenSize.width;
+      final aspectRatioY = screenSize.height;
+
+      // Step 3: Open image cropper
+      final croppedFile = await ImageCropper().cropImage(
+        sourcePath: originalFilePath,
+        aspectRatio: CropAspectRatio(
+          ratioX: aspectRatioX,
+          ratioY: aspectRatioY,
+        ),
+        uiSettings: [
+          AndroidUiSettings(
+            toolbarTitle: 'Crop Wallpaper',
+            toolbarColor: const Color(0xFF1A1A3E),
+            toolbarWidgetColor: Colors.white,
+            backgroundColor: const Color(0xFF0F0F23),
+            activeControlsWidgetColor: const Color(0xFF6366F1),
+            cropFrameColor: const Color(0xFF6366F1),
+            cropGridColor: Colors.white30,
+            initAspectRatio: CropAspectRatioPreset.original,
+            lockAspectRatio: true,
+            hideBottomControls: false,
+          ),
+        ],
+      );
+
+      if (!mounted) return;
+
+      // User cancelled cropping
+      if (croppedFile == null) {
+        await WallpaperService.deleteFile(originalFilePath);
+        setState(() => _isProcessing = false);
+        return;
+      }
+
+      croppedFilePath = croppedFile.path;
+
+      // Step 4: Show wallpaper location options
+      final selectedLocation = await _showWallpaperOptionsSheet();
+
+      if (selectedLocation == null) {
+        // User cancelled - cleanup files
+        await WallpaperService.deleteFiles([originalFilePath, croppedFilePath]);
+        setState(() => _isProcessing = false);
+        return;
+      }
+
+      // Step 5: Set wallpaper with selected location
+      _showLoadingDialog('Setting wallpaper...');
+      final success = await WallpaperService.setWallpaperFromFile(
+        croppedFilePath,
+        location: selectedLocation,
+        filesToCleanup: [originalFilePath, croppedFilePath],
+      );
+
+      if (!mounted) return;
+      Navigator.pop(context); // Close loading dialog
+
+      // Show result
+      _showResultSnackBar(success);
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        _showErrorSnackBar(e.toString());
+      }
+      // Cleanup on error
+      if (originalFilePath != null) {
+        await WallpaperService.deleteFile(originalFilePath);
+      }
+      if (croppedFilePath != null) {
+        await WallpaperService.deleteFile(croppedFilePath);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  void _showLoadingDialog(String message) {
+    showDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) => ImagePreviewSheet(image: image),
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF1A1A3E),
+          content: Row(
+            children: [
+              const CircularProgressIndicator(color: Color(0xFF6366F1)),
+              const SizedBox(width: 20),
+              Text(message, style: const TextStyle(color: Colors.white)),
+            ],
+          ),
+        ),
+      ),
     );
+  }
+
+  Future<WallpaperLocation?> _showWallpaperOptionsSheet() async {
+    return showModalBottomSheet<WallpaperLocation>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF1A1A3E),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.white30,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Text(
+              'Set Wallpaper',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Choose where to apply this wallpaper',
+              style: TextStyle(color: Colors.white60),
+            ),
+            const SizedBox(height: 24),
+            // Home Screen Button
+            _buildOptionButton(
+              icon: Icons.home_rounded,
+              label: 'Set Home Screen',
+              onTap: () => Navigator.pop(context, WallpaperLocation.homeScreen),
+            ),
+            const SizedBox(height: 12),
+            // Lock Screen Button
+            _buildOptionButton(
+              icon: Icons.lock_rounded,
+              label: 'Set Lock Screen',
+              onTap: () => Navigator.pop(context, WallpaperLocation.lockScreen),
+            ),
+            const SizedBox(height: 12),
+            // Both Screens Button
+            _buildOptionButton(
+              icon: Icons.phone_android_rounded,
+              label: 'Set Both',
+              isPrimary: true,
+              onTap: () => Navigator.pop(context, WallpaperLocation.both),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOptionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    bool isPrimary = false,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: isPrimary
+              ? const Color(0xFF6366F1)
+              : const Color(0xFF2D2D5A),
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: isPrimary ? 4 : 0,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 24),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showResultSnackBar(bool success) {
+    // Add small delay to let the layout stabilize after returning from cropper
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            success
+                ? '✓ Wallpaper set successfully!'
+                : '✗ Failed to set wallpaper',
+          ),
+          backgroundColor: success ? Colors.green : Colors.red,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    });
+  }
+
+  void _showErrorSnackBar(String error) {
+    // Add small delay to let the layout stabilize
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $error'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    });
   }
 
   @override
@@ -146,7 +389,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _fetchImages,
+            onPressed: _isProcessing ? null : _fetchImages,
             tooltip: 'Refresh',
           ),
         ],
@@ -222,7 +465,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Text(
-            'Recent ${_images.length} days',
+            'Recent ${_images.length} days • Tap to crop & set',
             style: const TextStyle(color: Colors.white60, fontSize: 14),
           ),
         ),
@@ -247,251 +490,77 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
 
   Widget _buildImageCard(BingImage image) {
     return GestureDetector(
-      onTap: () => _showImagePreview(image),
-      child: Hero(
-        tag: image.url,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.3),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                CachedNetworkImage(
-                  imageUrl: image.url,
-                  cacheManager: BingImageCacheManager.instance,
-                  fit: BoxFit.cover,
-                  placeholder: (context, url) => Container(
-                    color: Colors.grey[900],
-                    child: const Center(
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-                  errorWidget: (context, url, error) => Container(
-                    color: Colors.grey[900],
-                    child: const Icon(
-                      Icons.broken_image,
-                      color: Colors.white54,
-                      size: 40,
-                    ),
-                  ),
-                ),
-                // Gradient overlay for text readability
-                Positioned(
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.bottomCenter,
-                        end: Alignment.topCenter,
-                        colors: [
-                          Colors.black.withOpacity(0.8),
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                    padding: const EdgeInsets.all(12),
-                    child: Text(
-                      image.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+      onTap: () => _handleImageTap(image),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              CachedNetworkImage(
+                imageUrl: image.url,
+                cacheManager: BingImageCacheManager.instance,
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Container(
+                  color: Colors.grey[900],
+                  child: const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+                errorWidget: (context, url, error) => Container(
+                  color: Colors.grey[900],
+                  child: const Icon(
+                    Icons.broken_image,
+                    color: Colors.white54,
+                    size: 40,
+                  ),
+                ),
+              ),
+              // Gradient overlay for text readability
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.8),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                  padding: const EdgeInsets.all(12),
+                  child: Text(
+                    image.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ),
+              // Processing overlay
+              if (_isProcessing) Container(color: Colors.black45),
+            ],
           ),
         ),
       ),
-    );
-  }
-}
-
-/// Bottom sheet for image preview and wallpaper setting
-class ImagePreviewSheet extends StatefulWidget {
-  final BingImage image;
-
-  const ImagePreviewSheet({super.key, required this.image});
-
-  @override
-  State<ImagePreviewSheet> createState() => _ImagePreviewSheetState();
-}
-
-class _ImagePreviewSheetState extends State<ImagePreviewSheet> {
-  bool _isSettingWallpaper = false;
-
-  Future<void> _setWallpaper() async {
-    setState(() => _isSettingWallpaper = true);
-
-    try {
-      final success = await WallpaperService.setWallpaperFromUrl(
-        widget.image.url,
-      );
-
-      if (mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? '✓ Wallpaper set successfully!'
-                  : '✗ Failed to set wallpaper',
-            ),
-            backgroundColor: success ? Colors.green : Colors.red,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isSettingWallpaper = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.9,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (context, scrollController) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFF1A1A3E),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            children: [
-              // Drag handle
-              Container(
-                margin: const EdgeInsets.only(top: 12),
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white30,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              // Image preview
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Hero(
-                    tag: widget.image.url,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(20),
-                      child: CachedNetworkImage(
-                        imageUrl: widget.image.url,
-                        cacheManager: BingImageCacheManager.instance,
-                        fit: BoxFit.contain,
-                        placeholder: (context, url) =>
-                            const Center(child: CircularProgressIndicator()),
-                        errorWidget: (context, url, error) =>
-                            const Center(child: Icon(Icons.error, size: 48)),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              // Image info
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: Column(
-                  children: [
-                    Text(
-                      widget.image.title,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.image.copyright,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Colors.white60,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Set wallpaper button
-              Padding(
-                padding: const EdgeInsets.all(24),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: _isSettingWallpaper ? null : _setWallpaper,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF6366F1),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      elevation: 4,
-                    ),
-                    child: _isSettingWallpaper
-                        ? const SizedBox(
-                            width: 24,
-                            height: 24,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.wallpaper, size: 24),
-                              SizedBox(width: 12),
-                              Text(
-                                'Set as Wallpaper',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

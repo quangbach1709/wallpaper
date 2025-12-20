@@ -52,6 +52,9 @@ dependencies:
   
   # Cache manager for limiting storage
   flutter_cache_manager: any
+  
+  # Image cropping with custom aspect ratio
+  image_cropper: any
 
 dev_dependencies:
   flutter_test:

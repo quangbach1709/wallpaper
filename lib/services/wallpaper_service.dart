@@ -5,6 +5,9 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:wallpaper_manager_flutter/wallpaper_manager_flutter.dart';
 
+/// Enum for wallpaper location options
+enum WallpaperLocation { homeScreen, lockScreen, both }
+
 /// Model class representing a Bing image
 class BingImage {
   final String url;
@@ -101,23 +104,57 @@ class WallpaperService {
     }
   }
 
-  /// Sets the home screen wallpaper from a file path
-  static Future<bool> setWallpaper(String filePath) async {
+  /// Deletes multiple files from storage
+  static Future<void> deleteFiles(List<String> filePaths) async {
+    for (final path in filePaths) {
+      await deleteFile(path);
+    }
+  }
+
+  /// Sets wallpaper from a file path to specified location(s)
+  /// [location] - Where to set the wallpaper (home, lock, or both)
+  static Future<bool> setWallpaper(
+    String filePath, {
+    WallpaperLocation location = WallpaperLocation.homeScreen,
+  }) async {
     try {
       final wallpaperManager = WallpaperManagerFlutter();
-      final result = await wallpaperManager.setWallpaper(
-        File(filePath),
-        WallpaperManagerFlutter.homeScreen,
-      );
-      return result;
+      final file = File(filePath);
+
+      switch (location) {
+        case WallpaperLocation.homeScreen:
+          return await wallpaperManager.setWallpaper(
+            file,
+            WallpaperManagerFlutter.homeScreen,
+          );
+        case WallpaperLocation.lockScreen:
+          return await wallpaperManager.setWallpaper(
+            file,
+            WallpaperManagerFlutter.lockScreen,
+          );
+        case WallpaperLocation.both:
+          // Set for both screens
+          final homeResult = await wallpaperManager.setWallpaper(
+            file,
+            WallpaperManagerFlutter.homeScreen,
+          );
+          final lockResult = await wallpaperManager.setWallpaper(
+            file,
+            WallpaperManagerFlutter.lockScreen,
+          );
+          return homeResult && lockResult;
+      }
     } catch (e) {
       throw Exception('Error setting wallpaper: $e');
     }
   }
 
   /// Complete flow: Download -> Set Wallpaper -> Delete temp file
-  /// This is the main method used by both background tasks and manual selection
-  static Future<bool> setWallpaperFromUrl(String imageUrl) async {
+  /// Used for background tasks (sets BOTH screens)
+  static Future<bool> setWallpaperFromUrl(
+    String imageUrl, {
+    WallpaperLocation location = WallpaperLocation.both,
+  }) async {
     String? filePath;
 
     try {
@@ -125,7 +162,7 @@ class WallpaperService {
       filePath = await downloadImage(imageUrl);
 
       // Step 2: Set as wallpaper
-      final result = await setWallpaper(filePath);
+      final result = await setWallpaper(filePath, location: location);
 
       return result;
     } catch (e) {
@@ -138,8 +175,27 @@ class WallpaperService {
     }
   }
 
+  /// Sets wallpaper from a local file path with cleanup
+  /// Used for manual selection with cropped image
+  static Future<bool> setWallpaperFromFile(
+    String filePath, {
+    required WallpaperLocation location,
+    List<String> filesToCleanup = const [],
+  }) async {
+    try {
+      // Set as wallpaper
+      final result = await setWallpaper(filePath, location: location);
+      return result;
+    } catch (e) {
+      rethrow;
+    } finally {
+      // ALWAYS cleanup all temp files
+      await deleteFiles(filesToCleanup);
+    }
+  }
+
   /// Background task entry point for WorkManager
-  /// Fetches today's Bing image and sets it as wallpaper
+  /// Fetches today's Bing image and sets it as wallpaper for BOTH screens
   static Future<bool> executeBackgroundTask() async {
     try {
       // Fetch the latest Bing image (just 1)
@@ -149,8 +205,11 @@ class WallpaperService {
         throw Exception('No images returned from Bing API');
       }
 
-      // Set the wallpaper using the complete flow
-      final result = await setWallpaperFromUrl(images.first.url);
+      // Set the wallpaper for BOTH home and lock screens
+      final result = await setWallpaperFromUrl(
+        images.first.url,
+        location: WallpaperLocation.both,
+      );
 
       return result;
     } catch (e) {
