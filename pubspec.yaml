@@ -58,6 +58,9 @@ dependencies:
   
   # Local storage for API caching
   shared_preferences: any
+  
+  # Date/time formatting
+  intl: any
 
 dev_dependencies:
   flutter_test:

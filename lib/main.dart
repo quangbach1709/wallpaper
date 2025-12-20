@@ -5,9 +5,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_cropper/image_cropper.dart';
 
 import 'services/wallpaper_service.dart';
-
-// WorkManager task name
-const String dailyWallpaperTask = 'dailyWallpaperTask';
+import 'screens/settings_screen.dart';
 
 /// Custom cache manager with strict limits to prevent app bloating
 class WallpaperCacheManager {
@@ -22,26 +20,12 @@ class WallpaperCacheManager {
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     switch (task) {
-      case dailyWallpaperTask:
-        // Background task sets wallpaper for BOTH screens using Unsplash
+      case dailyWallpaperTaskName:
         return await WallpaperService.executeBackgroundTask();
       default:
         return Future.value(true);
     }
   });
-}
-
-/// Calculate initial delay to run task at 6:00 AM
-Duration calculateInitialDelay() {
-  final now = DateTime.now();
-  var scheduledTime = DateTime(now.year, now.month, now.day, 6, 0, 0);
-
-  // If 6 AM has already passed today, schedule for tomorrow
-  if (now.isAfter(scheduledTime)) {
-    scheduledTime = scheduledTime.add(const Duration(days: 1));
-  }
-
-  return scheduledTime.difference(now);
 }
 
 void main() async {
@@ -50,15 +34,15 @@ void main() async {
   // Initialize WorkManager
   await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
 
-  // Register periodic task for daily wallpaper change at 6 AM
-  await Workmanager().registerPeriodicTask(
-    'dailyWallpaper',
-    dailyWallpaperTask,
-    initialDelay: calculateInitialDelay(),
-    frequency: const Duration(hours: 24),
-    constraints: Constraints(networkType: NetworkType.connected),
-    existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
-  );
+  // Load saved settings and schedule accordingly
+  final settings = await ScheduleHelper.loadSettings();
+  final isAutoActive = settings['isAutoActive'] ?? true;
+  final hour = settings['hour'] ?? 6;
+  final minute = settings['minute'] ?? 0;
+
+  if (isAutoActive) {
+    await ScheduleHelper.scheduleBackgroundTask(hour, minute);
+  }
 
   runApp(const WallpaperApp());
 }
@@ -399,9 +383,14 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isProcessing ? null : _fetchImages,
-            tooltip: 'Refresh',
+            icon: const Icon(Icons.settings_rounded),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+            tooltip: 'Settings',
           ),
         ],
       ),
@@ -559,9 +548,10 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             fit: StackFit.expand,
             children: [
               CachedNetworkImage(
-                imageUrl: image.thumbUrl,
+                imageUrl: image.regularUrl, // Use regular for better quality
                 cacheManager: WallpaperCacheManager.instance,
                 fit: BoxFit.cover,
+                memCacheWidth: 500, // Limit memory usage for 2-column grid
                 placeholder: (context, url) => Container(
                   color: Colors.grey[900],
                   child: const Center(

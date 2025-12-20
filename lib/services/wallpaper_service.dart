@@ -5,15 +5,26 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wallpaper_manager_flutter/wallpaper_manager_flutter.dart';
+import 'package:workmanager/workmanager.dart';
 
 /// Unsplash API Configuration
-const String unsplashAccessKey = '8j6bFdAOUOn4PI-ABF169gGccTlH_p-Uu4SIHUt7tfc';
+/// NOTE: No default key - user must enter their own key in Settings
 const String _unsplashBaseUrl = 'https://api.unsplash.com';
 
+/// SharedPreferences Keys
+const String prefKeyIsAutoActive = 'is_auto_active';
+const String prefKeyScheduledHour = 'scheduled_hour';
+const String prefKeyScheduledMinute = 'scheduled_minute';
+const String prefKeyCustomApiKey = 'custom_api_key';
+const String prefKeyCachedWallpapers = 'cached_wallpapers_json';
+const String prefKeyCachedTimestamp = 'cached_wallpapers_timestamp';
+
+/// WorkManager task name
+const String dailyWallpaperTaskName = 'dailyWallpaperTask';
+const String dailyWallpaperTaskId = 'dailyWallpaper';
+
 /// Cache Configuration
-const String _cacheKeyWallpapers = 'cached_wallpapers_json';
-const String _cacheKeyTimestamp = 'cached_wallpapers_timestamp';
-const int _cacheDurationMinutes = 60; // 60 minutes cache validity
+const int cacheDurationMinutes = 60;
 
 /// Enum for wallpaper location options
 enum WallpaperLocation { homeScreen, lockScreen, both }
@@ -56,7 +67,6 @@ class UnsplashImage {
     );
   }
 
-  /// Convert to JSON for caching
   Map<String, dynamic> toJson() => {
     'id': id,
     'urls': {'regular': regularUrl, 'full': fullUrl, 'thumb': thumbUrl},
@@ -66,44 +76,62 @@ class UnsplashImage {
     'height': height,
   };
 
-  /// Get display title (description or photographer credit)
   String get displayTitle => description ?? 'Photo by $photographerName';
 }
 
 /// Service class for handling wallpaper operations with Unsplash API
 class WallpaperService {
-  /// Common headers for Unsplash API
-  static Map<String, String> get _headers => {
-    'Authorization': 'Client-ID $unsplashAccessKey',
-    'Accept-Version': 'v1',
-  };
+  /// Check if API key is configured
+  static Future<bool> hasApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final customKey = prefs.getString(prefKeyCustomApiKey);
+    return customKey != null && customKey.trim().isNotEmpty;
+  }
+
+  /// Get the active API key (user must provide in Settings)
+  static Future<String?> _getActiveApiKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    final customKey = prefs.getString(prefKeyCustomApiKey);
+    if (customKey != null && customKey.trim().isNotEmpty) {
+      return customKey.trim();
+    }
+    return null; // No key configured
+  }
+
+  /// Get headers with dynamic API key
+  static Future<Map<String, String>> _getHeaders() async {
+    final apiKey = await _getActiveApiKey();
+    if (apiKey == null) {
+      throw Exception(
+        'No API key configured. Please add your Unsplash Access Key in Settings.',
+      );
+    }
+    return {'Authorization': 'Client-ID $apiKey', 'Accept-Version': 'v1'};
+  }
 
   /// Check if cache is valid (less than 60 minutes old)
   static Future<bool> _isCacheValid() async {
     final prefs = await SharedPreferences.getInstance();
-    final timestampStr = prefs.getString(_cacheKeyTimestamp);
-
+    final timestampStr = prefs.getString(prefKeyCachedTimestamp);
     if (timestampStr == null) return false;
 
     final cachedTime = DateTime.tryParse(timestampStr);
     if (cachedTime == null) return false;
 
     final difference = DateTime.now().difference(cachedTime);
-    return difference.inMinutes < _cacheDurationMinutes;
+    return difference.inMinutes < cacheDurationMinutes;
   }
 
   /// Get cached wallpapers from SharedPreferences
   static Future<List<UnsplashImage>?> _getCachedWallpapers() async {
     final prefs = await SharedPreferences.getInstance();
-    final cachedJson = prefs.getString(_cacheKeyWallpapers);
-
+    final cachedJson = prefs.getString(prefKeyCachedWallpapers);
     if (cachedJson == null) return null;
 
     try {
       final List<dynamic> data = json.decode(cachedJson);
       return data.map((json) => UnsplashImage.fromJson(json)).toList();
     } catch (e) {
-      // Invalid cache, return null
       return null;
     }
   }
@@ -111,50 +139,47 @@ class WallpaperService {
   /// Save wallpapers to cache
   static Future<void> _cacheWallpapers(String jsonResponse) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_cacheKeyWallpapers, jsonResponse);
-    await prefs.setString(_cacheKeyTimestamp, DateTime.now().toIso8601String());
+    await prefs.setString(prefKeyCachedWallpapers, jsonResponse);
+    await prefs.setString(
+      prefKeyCachedTimestamp,
+      DateTime.now().toIso8601String(),
+    );
   }
 
   /// Fetches trending portrait wallpapers for the gallery
-  /// [count] - Number of images to fetch (default 30)
-  /// [forceRefresh] - If true, bypass cache and fetch fresh data
   static Future<List<UnsplashImage>> fetchTrendingWallpapers({
     int count = 30,
     bool forceRefresh = false,
   }) async {
-    // Step 1: Check cache (unless force refresh)
+    // Check cache (unless force refresh)
     if (!forceRefresh) {
       final isValid = await _isCacheValid();
       if (isValid) {
         final cached = await _getCachedWallpapers();
         if (cached != null && cached.isNotEmpty) {
-          // Cache hit - return cached data
           return cached;
         }
       }
     }
 
-    // Step 2: Cache miss or force refresh - fetch from API
+    // Fetch from API
     try {
+      final headers = await _getHeaders();
       final uri = Uri.parse(
         '$_unsplashBaseUrl/photos?per_page=$count&order_by=popular&orientation=portrait',
       );
 
-      final response = await http.get(uri, headers: _headers);
+      final response = await http.get(uri, headers: headers);
 
       if (response.statusCode == 200) {
-        // Save to cache
         await _cacheWallpapers(response.body);
-
         final List<dynamic> data = json.decode(response.body);
         return data.map((json) => UnsplashImage.fromJson(json)).toList();
       } else {
-        throw Exception(
-          'Failed to fetch wallpapers: ${response.statusCode} - ${response.body}',
-        );
+        throw Exception('Failed: ${response.statusCode} - ${response.body}');
       }
     } catch (e) {
-      // On error, try to return cached data as fallback
+      // Fallback to cache on error
       final cached = await _getCachedWallpapers();
       if (cached != null && cached.isNotEmpty) {
         return cached;
@@ -166,15 +191,15 @@ class WallpaperService {
   /// Fetches a random portrait wallpaper for background task
   static Future<UnsplashImage> fetchRandomWallpaper() async {
     try {
+      final headers = await _getHeaders();
       final uri = Uri.parse(
         '$_unsplashBaseUrl/photos/random?orientation=portrait&query=nature,architecture,abstract&count=1',
       );
 
-      final response = await http.get(uri, headers: _headers);
+      final response = await http.get(uri, headers: headers);
 
       if (response.statusCode == 200) {
         final dynamic data = json.decode(response.body);
-        // Response is an array when count=1
         if (data is List && data.isNotEmpty) {
           return UnsplashImage.fromJson(data.first);
         } else if (data is Map<String, dynamic>) {
@@ -182,9 +207,7 @@ class WallpaperService {
         }
         throw Exception('Invalid response format');
       } else {
-        throw Exception(
-          'Failed to fetch random wallpaper: ${response.statusCode}',
-        );
+        throw Exception('Failed: ${response.statusCode}');
       }
     } catch (e) {
       throw Exception('Error fetching random wallpaper: $e');
@@ -207,7 +230,7 @@ class WallpaperService {
 
         return filePath;
       } else {
-        throw Exception('Failed to download image: ${response.statusCode}');
+        throw Exception('Failed to download: ${response.statusCode}');
       }
     } catch (e) {
       throw Exception('Error downloading image: $e');
@@ -275,7 +298,6 @@ class WallpaperService {
     WallpaperLocation location = WallpaperLocation.both,
   }) async {
     String? filePath;
-
     try {
       filePath = await downloadImage(imageUrl);
       final result = await setWallpaper(filePath, location: location);
@@ -317,6 +339,73 @@ class WallpaperService {
     } catch (e) {
       print('Background task failed: $e');
       return false;
+    }
+  }
+}
+
+/// Helper class for WorkManager scheduling
+class ScheduleHelper {
+  /// Calculate initial delay to target a specific hour:minute
+  static Duration calculateDelay(int hour, int minute) {
+    final now = DateTime.now();
+    var scheduledTime = DateTime(now.year, now.month, now.day, hour, minute, 0);
+
+    // If target time has passed today, schedule for tomorrow
+    if (now.isAfter(scheduledTime)) {
+      scheduledTime = scheduledTime.add(const Duration(days: 1));
+    }
+
+    return scheduledTime.difference(now);
+  }
+
+  /// Schedule the background task at specified time
+  static Future<void> scheduleBackgroundTask(int hour, int minute) async {
+    // Cancel existing task first
+    await Workmanager().cancelByUniqueName(dailyWallpaperTaskId);
+
+    // Calculate delay
+    final delay = calculateDelay(hour, minute);
+
+    // Register new periodic task
+    await Workmanager().registerPeriodicTask(
+      dailyWallpaperTaskId,
+      dailyWallpaperTaskName,
+      initialDelay: delay,
+      frequency: const Duration(hours: 24),
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
+    );
+  }
+
+  /// Cancel the background task
+  static Future<void> cancelBackgroundTask() async {
+    await Workmanager().cancelByUniqueName(dailyWallpaperTaskId);
+  }
+
+  /// Load saved schedule settings
+  static Future<Map<String, dynamic>> loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      'isAutoActive': prefs.getBool(prefKeyIsAutoActive) ?? true,
+      'hour': prefs.getInt(prefKeyScheduledHour) ?? 6,
+      'minute': prefs.getInt(prefKeyScheduledMinute) ?? 0,
+      'customApiKey': prefs.getString(prefKeyCustomApiKey) ?? '',
+    };
+  }
+
+  /// Save schedule settings
+  static Future<void> saveSettings({
+    required bool isAutoActive,
+    required int hour,
+    required int minute,
+    String? customApiKey,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(prefKeyIsAutoActive, isAutoActive);
+    await prefs.setInt(prefKeyScheduledHour, hour);
+    await prefs.setInt(prefKeyScheduledMinute, minute);
+    if (customApiKey != null) {
+      await prefs.setString(prefKeyCustomApiKey, customApiKey);
     }
   }
 }
