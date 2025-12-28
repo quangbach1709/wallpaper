@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:quick_actions/quick_actions.dart';
 
+import 'utils/notification_helper.dart';
 import 'services/wallpaper_service.dart';
 import 'screens/settings_screen.dart';
 import 'screens/image_detail_screen.dart';
@@ -33,6 +35,9 @@ void main() async {
 
   // Initialize WorkManager
   await Workmanager().initialize(callbackDispatcher, isInDebugMode: false);
+
+  // Initialize Notifications
+  await NotificationHelper.initialize();
 
   // Load saved settings and schedule accordingly
   final settings = await ScheduleHelper.loadSettings();
@@ -90,6 +95,69 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   void initState() {
     super.initState();
     _fetchImages();
+    _initQuickActions();
+  }
+
+  void _initQuickActions() {
+    const quickActions = QuickActions();
+
+    // Register shortcut items
+    quickActions.setShortcutItems(<ShortcutItem>[
+      const ShortcutItem(
+        type: 'action_change_wallpaper',
+        localizedTitle: 'Change Wallpaper Now',
+        icon: 'ic_launcher',
+      ),
+    ]);
+
+    // Handle shortcut action
+    quickActions.initialize((String shortcutType) {
+      if (shortcutType == 'action_change_wallpaper') {
+        _handleQuickActionChangeWallpaper();
+      }
+    });
+  }
+
+  Future<void> _handleQuickActionChangeWallpaper() async {
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('Changing wallpaper...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final success = await WallpaperService.executeBackgroundTask();
+      if (mounted) Navigator.of(context).pop(); // Close dialog
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              success
+                  ? '✓ Wallpaper changed successfully!'
+                  : '✗ Failed to change wallpaper',
+            ),
+            backgroundColor: success ? Colors.green : Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Future<void> _fetchImages({bool forceRefresh = false}) async {

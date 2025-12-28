@@ -60,6 +60,8 @@ dependencies:
   
   # Date/time formatting
   intl: any
+  flutter_local_notifications: ^17.0.0
+  quick_actions: ^1.1.0
 
 dev_dependencies:
   flutter_test:

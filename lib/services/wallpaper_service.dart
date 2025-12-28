@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wallpaper_manager_flutter/wallpaper_manager_flutter.dart';
 import 'package:workmanager/workmanager.dart';
+import '../utils/notification_helper.dart';
 
 /// Unsplash API Configuration
 /// NOTE: No default key - user must enter their own key in Settings
@@ -370,14 +371,34 @@ class WallpaperService {
   /// Background task entry point for WorkManager
   static Future<bool> executeBackgroundTask() async {
     try {
+      print('=== Background Task Started ===');
+
+      // Ensure notifications are initialized in background isolate
+      await NotificationHelper.initialize();
+      print('Notifications initialized');
+
+      print('Fetching random wallpaper...');
       final image = await fetchRandomWallpaper();
+      print('Got image: ${image.id}');
+
+      print('Setting wallpaper from URL...');
       final result = await setWallpaperFromUrl(
         image.fullUrl,
         location: WallpaperLocation.both,
       );
+      print('Set wallpaper result: $result');
+
+      if (result) {
+        await NotificationHelper.showWallpaperUpdated();
+        print('Notification sent!');
+      }
+
+      print('=== Background Task Completed Successfully ===');
       return result;
-    } catch (e) {
-      print('Background task failed: $e');
+    } catch (e, stackTrace) {
+      print('=== Background task failed ===');
+      print('Error: $e');
+      print('StackTrace: $stackTrace');
       return false;
     }
   }

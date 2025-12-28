@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../services/wallpaper_service.dart';
+import '../utils/notification_helper.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -58,7 +59,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _saveSettings();
 
     if (value) {
-      // Enable: schedule the task
+      // Enable: request permission and schedule the task
+      await NotificationHelper.requestPermissions();
+
       await ScheduleHelper.scheduleBackgroundTask(
         _scheduledHour,
         _scheduledMinute,

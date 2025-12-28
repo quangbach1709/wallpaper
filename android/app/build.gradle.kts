@@ -8,11 +8,13 @@ plugins {
 android {
     namespace = "com.example.wallpaper"
     compileSdk = flutter.compileSdkVersion
+    // compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -24,10 +26,12 @@ android {
         applicationId = "com.example.wallpaper"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion  // Required for WorkManager and async_wallpaper
+        // minSdk = flutter.minSdkVersion  // Required for WorkManager and async_wallpaper
+        minSdk = flutter.minSdkVersion // Enforce minSdk 21 for flutter_local_notifications
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -39,9 +43,9 @@ android {
     }
 }
 
-// Dependencies required for image_cropper (UCrop)
 dependencies {
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.3")
+    implementation("androidx.multidex:multidex:2.0.1")
 }
 
 flutter {
