@@ -110,6 +110,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _customApiKey = value.trim();
   }
 
+  Future<void> _testBackgroundTask() async {
+    if (_isLoading) return;
+
+    if (_customApiKey.isEmpty) {
+      _showSnackBar('⚠️ Please verify API Key first', isWarning: true);
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    _showSnackBar('Testing background task... (Check both screens)');
+
+    try {
+      final success = await WallpaperService.executeBackgroundTask();
+      if (success) {
+        _showSnackBar('✓ Background task executed successfully!');
+      } else {
+        _showSnackBar(
+          '✗ Background task failed. Check logs/connection.',
+          isWarning: true,
+        );
+      }
+    } catch (e) {
+      _showSnackBar('Error: $e', isWarning: true);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _saveApiKey() async {
     await _saveSettings();
     if (_customApiKey.isEmpty) {
@@ -259,6 +287,44 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 vertical: 4,
               ),
             ),
+          // Test Button
+          if (_isAutoActive) ...[
+            const Divider(
+              color: Colors.white12,
+              height: 1,
+              indent: 16,
+              endIndent: 16,
+            ),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.build_circle_outlined,
+                  color: Colors.orange,
+                ),
+              ),
+              title: const Text(
+                'Test Background Task Now',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              subtitle: const Text(
+                'Immediately trigger wallpaper change',
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+              ),
+              onTap: _testBackgroundTask,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 4,
+              ),
+            ),
+          ],
         ],
       ),
     );
