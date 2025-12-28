@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
@@ -17,12 +18,18 @@ class WallpaperCacheManager {
   );
 }
 
+/// Task name for force update from shortcut
+const String forceUpdateTaskName = 'force_update_wallpaper_task';
+const String forceUpdateTaskId = 'force_update_wallpaper_id';
+
 /// Callback dispatcher for WorkManager (must be top-level function)
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
     switch (task) {
       case dailyWallpaperTaskName:
+      case forceUpdateTaskName:
+        // Both scheduled and force-update tasks use same logic
         return await WallpaperService.executeBackgroundTask();
       default:
         return Future.value(true);
@@ -110,7 +117,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
       ),
     ]);
 
-    // Handle shortcut action
+    // Handle shortcut action - "Hit and Run" strategy
     quickActions.initialize((String shortcutType) {
       if (shortcutType == 'action_change_wallpaper') {
         _handleQuickActionChangeWallpaper();
@@ -119,45 +126,15 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   }
 
   Future<void> _handleQuickActionChangeWallpaper() async {
-    // Show loading dialog
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('Changing wallpaper...'),
-          ],
-        ),
-      ),
+    // Register a one-off background task
+    await Workmanager().registerOneOffTask(
+      forceUpdateTaskId,
+      forceUpdateTaskName,
+      constraints: Constraints(networkType: NetworkType.connected),
     );
 
-    try {
-      final success = await WallpaperService.executeBackgroundTask();
-      if (mounted) Navigator.of(context).pop(); // Close dialog
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              success
-                  ? '✓ Wallpaper changed successfully!'
-                  : '✗ Failed to change wallpaper',
-            ),
-            backgroundColor: success ? Colors.green : Colors.red,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) Navigator.of(context).pop();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-        );
-      }
-    }
+    // Close the app immediately - "Hit and Run"
+    SystemNavigator.pop();
   }
 
   Future<void> _fetchImages({bool forceRefresh = false}) async {
