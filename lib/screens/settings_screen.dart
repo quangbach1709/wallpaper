@@ -139,6 +139,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _saveApiKey() async {
+    // Validate API Key: Alphanumeric, reasonable length (Unsplash keys are ~43-50 chars usually, but we'll accept 20+)
+    final validKeyRegex = RegExp(r'^[a-zA-Z0-9\-_]{20,}$');
+    if (_customApiKey.isNotEmpty && !validKeyRegex.hasMatch(_customApiKey)) {
+      _showSnackBar(
+        '⚠️ Invalid API Key format. Cleaning up...',
+        isWarning: true,
+      );
+      setState(() {
+        _customApiKey = '';
+        _apiKeyController.clear();
+      });
+      await _saveSettings(); // Save empty to clear garbage
+      return;
+    }
+
     await _saveSettings();
     if (_customApiKey.isEmpty) {
       _showSnackBar(

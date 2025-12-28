@@ -106,7 +106,15 @@ class WallpaperService {
         'No API key configured. Please add your Unsplash Access Key in Settings.',
       );
     }
-    return {'Authorization': 'Client-ID $apiKey', 'Accept-Version': 'v1'};
+
+    // Sanitize to prevent header injection/format errors
+    // Limit length to 100 just in case and remove non-alphanumeric chars
+    final sanitizedKey = apiKey.replaceAll(RegExp(r'[^a-zA-Z0-9\-_]'), '');
+    if (sanitizedKey.isEmpty) {
+      throw Exception('Invalid API Key format.');
+    }
+
+    return {'Authorization': 'Client-ID $sanitizedKey', 'Accept-Version': 'v1'};
   }
 
   /// Check if cache is valid (less than 60 minutes old)
@@ -165,8 +173,12 @@ class WallpaperService {
     // Fetch from API
     try {
       final headers = await _getHeaders();
-      final uri = Uri.parse(
-        '$_unsplashBaseUrl/photos?per_page=$count&order_by=popular&orientation=portrait',
+      final uri = Uri.parse('$_unsplashBaseUrl/photos').replace(
+        queryParameters: {
+          'per_page': count.toString(),
+          'order_by': 'popular',
+          'orientation': 'portrait',
+        },
       );
 
       final response = await http.get(uri, headers: headers);
@@ -174,7 +186,18 @@ class WallpaperService {
       if (response.statusCode == 200) {
         await _cacheWallpapers(response.body);
         final List<dynamic> data = json.decode(response.body);
-        return data.map((json) => UnsplashImage.fromJson(json)).toList();
+
+        // Filter: Keep only TALL images (ratio > 1.2)
+        // Ratio = Height / Width
+        final filteredList = data.where((img) {
+          final double h = (img['height'] as num).toDouble();
+          final double w = (img['width'] as num).toDouble();
+          return (h / w) > 1.2;
+        }).toList();
+
+        return filteredList
+            .map((json) => UnsplashImage.fromJson(json))
+            .toList();
       } else {
         throw Exception('Failed: ${response.statusCode} - ${response.body}');
       }
@@ -192,20 +215,37 @@ class WallpaperService {
   static Future<UnsplashImage> fetchRandomWallpaper() async {
     try {
       final headers = await _getHeaders();
-      final uri = Uri.parse(
-        '$_unsplashBaseUrl/photos/random?orientation=portrait&query=nature,architecture,abstract&count=1',
+      // Request buffer of 10 images to ensure we find one with good ratio
+      final uri = Uri.parse('$_unsplashBaseUrl/photos/random').replace(
+        queryParameters: {
+          'orientation': 'portrait',
+          'query': 'nature,architecture,abstract',
+          'count': '10',
+        },
       );
 
       final response = await http.get(uri, headers: headers);
 
       if (response.statusCode == 200) {
-        final dynamic data = json.decode(response.body);
-        if (data is List && data.isNotEmpty) {
-          return UnsplashImage.fromJson(data.first);
-        } else if (data is Map<String, dynamic>) {
-          return UnsplashImage.fromJson(data);
+        final List<dynamic> data = json.decode(response.body);
+
+        // Find first image with ratio > 1.2
+        final validImgJson = data.firstWhere((img) {
+          final double h = (img['height'] as num).toDouble();
+          final double w = (img['width'] as num).toDouble();
+          return (h / w) > 1.2;
+        }, orElse: () => null);
+
+        if (validImgJson != null) {
+          return UnsplashImage.fromJson(validImgJson);
         }
-        throw Exception('Invalid response format');
+
+        // Fallback: If no strict portrait found, just take the first one
+        if (data.isNotEmpty) {
+          return UnsplashImage.fromJson(data.first);
+        }
+
+        throw Exception('No images returned from API');
       } else {
         throw Exception('Failed: ${response.statusCode}');
       }
