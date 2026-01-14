@@ -209,6 +209,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildSectionHeader('Auto-Change Wallpaper'),
                   _buildAutoChangeCard(),
                   const SizedBox(height: 24),
+                  _buildSectionHeader('Wallpaper History'),
+                  _buildHistoryCard(),
+                  const SizedBox(height: 24),
                   _buildSectionHeader('API Configuration'),
                   _buildApiKeyCard(),
                   const SizedBox(height: 24),
@@ -344,6 +347,75 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Future<void> _clearWallpaperHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A3E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Clear Wallpaper History?',
+          style: TextStyle(color: Colors.white),
+        ),
+        content: const Text(
+          'This will reset the history and allow previously used wallpapers to appear again.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white54),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6366F1),
+            ),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await WallpaperService.clearWallpaperHistory();
+      _showSnackBar('✓ Wallpaper history cleared');
+    }
+  }
+
+  Widget _buildHistoryCard() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A3E),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: ListTile(
+        leading: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.red.withOpacity(0.2),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.history, color: Colors.redAccent),
+        ),
+        title: const Text(
+          'Clear Wallpaper History',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500),
+        ),
+        subtitle: const Text(
+          'Allow previously used wallpapers to appear again',
+          style: TextStyle(color: Colors.white60, fontSize: 12),
+        ),
+        trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+        onTap: _clearWallpaperHistory,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       ),
     );
   }

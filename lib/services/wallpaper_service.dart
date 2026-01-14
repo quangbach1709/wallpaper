@@ -19,6 +19,7 @@ const String prefKeyScheduledMinute = 'scheduled_minute';
 const String prefKeyCustomApiKey = 'custom_api_key';
 const String prefKeyCachedWallpapers = 'cached_wallpapers_json';
 const String prefKeyCachedTimestamp = 'cached_wallpapers_timestamp';
+const String prefKeyWallpaperHistory = 'wallpaper_history_ids';
 
 /// WorkManager task name
 const String dailyWallpaperTaskName = 'dailyWallpaperTask';
@@ -26,6 +27,9 @@ const String dailyWallpaperTaskId = 'dailyWallpaper';
 
 /// Cache Configuration
 const int cacheDurationMinutes = 60;
+
+/// Maximum number of wallpaper IDs to keep in history (to prevent repetition)
+const int maxWallpaperHistorySize = 50;
 
 /// Enum for wallpaper location options
 enum WallpaperLocation { homeScreen, lockScreen, both }
@@ -212,16 +216,57 @@ class WallpaperService {
     }
   }
 
+  /// Get list of wallpaper IDs that have been used recently
+  static Future<List<String>> _getWallpaperHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final historyJson = prefs.getString(prefKeyWallpaperHistory);
+    if (historyJson == null) return [];
+
+    try {
+      final List<dynamic> data = json.decode(historyJson);
+      return data.cast<String>();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Add a wallpaper ID to history (keeps only recent entries)
+  static Future<void> _addToWallpaperHistory(String imageId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = await _getWallpaperHistory();
+
+    // Remove if already exists (to move it to the end)
+    history.remove(imageId);
+    // Add to end of list
+    history.add(imageId);
+
+    // Keep only the most recent entries
+    while (history.length > maxWallpaperHistorySize) {
+      history.removeAt(0);
+    }
+
+    await prefs.setString(prefKeyWallpaperHistory, json.encode(history));
+  }
+
+  /// Clear wallpaper history (useful if user wants to see repeated images)
+  static Future<void> clearWallpaperHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(prefKeyWallpaperHistory);
+  }
+
   /// Fetches a random portrait wallpaper for background task
+  /// Ensures the wallpaper hasn't been used recently
   static Future<UnsplashImage> fetchRandomWallpaper() async {
     try {
       final headers = await _getHeaders();
-      // Request buffer of 10 images to ensure we find one with good ratio
+      final usedIds = await _getWallpaperHistory();
+
+      // Request buffer of 30 images to ensure we find one that hasn't been used
       final uri = Uri.parse('$_unsplashBaseUrl/photos/random').replace(
         queryParameters: {
           'orientation': 'portrait',
           'query': 'nature,architecture,abstract',
-          'count': '10',
+          'count': '30',
         },
       );
 
@@ -230,20 +275,41 @@ class WallpaperService {
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
 
-        // Find first image with ratio > 1.2
+        // Filter out already used images and find one with good ratio
         final validImgJson = data.firstWhere((img) {
+          final String id = img['id'] ?? '';
+          final double h = (img['height'] as num).toDouble();
+          final double w = (img['width'] as num).toDouble();
+          final bool hasGoodRatio = (h / w) > 1.2;
+          final bool notUsedRecently = !usedIds.contains(id);
+          return hasGoodRatio && notUsedRecently;
+        }, orElse: () => null);
+
+        if (validImgJson != null) {
+          final image = UnsplashImage.fromJson(validImgJson);
+          // Add to history so it won't be repeated soon
+          await _addToWallpaperHistory(image.id);
+          return image;
+        }
+
+        // Fallback: If all images were used, find one with good ratio (allow repeat)
+        final fallbackImg = data.firstWhere((img) {
           final double h = (img['height'] as num).toDouble();
           final double w = (img['width'] as num).toDouble();
           return (h / w) > 1.2;
         }, orElse: () => null);
 
-        if (validImgJson != null) {
-          return UnsplashImage.fromJson(validImgJson);
+        if (fallbackImg != null) {
+          final image = UnsplashImage.fromJson(fallbackImg);
+          await _addToWallpaperHistory(image.id);
+          return image;
         }
 
-        // Fallback: If no strict portrait found, just take the first one
+        // Last resort: take first image if available
         if (data.isNotEmpty) {
-          return UnsplashImage.fromJson(data.first);
+          final image = UnsplashImage.fromJson(data.first);
+          await _addToWallpaperHistory(image.id);
+          return image;
         }
 
         throw Exception('No images returned from API');
