@@ -18,6 +18,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _scheduledMinute = 0;
   String _customApiKey = '';
   bool _obscureApiKey = true;
+  int _wallpaperLocation = 3;
 
   final TextEditingController _apiKeyController = TextEditingController();
 
@@ -40,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _scheduledHour = settings['hour'] ?? 6;
       _scheduledMinute = settings['minute'] ?? 0;
       _customApiKey = settings['customApiKey'] ?? '';
+      _wallpaperLocation = settings['wallpaperLocation'] ?? 3;
       _apiKeyController.text = _customApiKey;
       _isLoading = false;
     });
@@ -51,6 +53,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       hour: _scheduledHour,
       minute: _scheduledMinute,
       customApiKey: _customApiKey,
+      wallpaperLocation: _wallpaperLocation,
     );
   }
 
@@ -310,6 +313,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           // Test Button
           if (_isAutoActive) ...[
+            const Divider(
+              color: Colors.white12,
+              height: 1,
+              indent: 16,
+              endIndent: 16,
+            ),
+            ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF6366F1).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.phone_android_rounded,
+                  color: Color(0xFF6366F1),
+                ),
+              ),
+              title: const Text(
+                'Auto-Update Location',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              subtitle: const Text(
+                'Which screen to update automatically',
+                style: TextStyle(color: Colors.white60, fontSize: 12),
+              ),
+              trailing: DropdownButton<int>(
+                value: _wallpaperLocation,
+                dropdownColor: const Color(0xFF1A1A3E),
+                underline: const SizedBox.shrink(),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                items: const [
+                  DropdownMenuItem(value: 1, child: Text('Home Screen Only')),
+                  DropdownMenuItem(value: 2, child: Text('Lock Screen Only')),
+                  DropdownMenuItem(value: 3, child: Text('Both Screens')),
+                ],
+                onChanged: (value) async {
+                  if (value == null) return;
+                  setState(() => _wallpaperLocation = value);
+                  await _saveSettings();
+                },
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 4,
+              ),
+            ),
             const Divider(
               color: Colors.white12,
               height: 1,

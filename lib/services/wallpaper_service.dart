@@ -20,6 +20,7 @@ const String prefKeyCustomApiKey = 'custom_api_key';
 const String prefKeyCachedWallpapers = 'cached_wallpapers_json';
 const String prefKeyCachedTimestamp = 'cached_wallpapers_timestamp';
 const String prefKeyWallpaperHistory = 'wallpaper_history_ids';
+const String prefKeyWallpaperLocation = 'auto_wallpaper_location';
 
 /// WorkManager task name
 const String dailyWallpaperTaskName = 'dailyWallpaperTask';
@@ -448,10 +449,14 @@ class WallpaperService {
       print('Got image: ${image.id}');
 
       print('Setting wallpaper from URL...');
-      final result = await setWallpaperFromUrl(
-        image.fullUrl,
-        location: WallpaperLocation.both,
-      );
+      final prefs = await SharedPreferences.getInstance();
+      final locationInt = prefs.getInt(prefKeyWallpaperLocation) ?? 3;
+      final location = locationInt == 1
+          ? WallpaperLocation.homeScreen
+          : locationInt == 2
+          ? WallpaperLocation.lockScreen
+          : WallpaperLocation.both;
+      final result = await setWallpaperFromUrl(image.fullUrl, location: location);
       print('Set wallpaper result: $result');
 
       if (result) {
@@ -517,6 +522,7 @@ class ScheduleHelper {
       'hour': prefs.getInt(prefKeyScheduledHour) ?? 6,
       'minute': prefs.getInt(prefKeyScheduledMinute) ?? 0,
       'customApiKey': prefs.getString(prefKeyCustomApiKey) ?? '',
+      'wallpaperLocation': prefs.getInt(prefKeyWallpaperLocation) ?? 3,
     };
   }
 
@@ -526,6 +532,7 @@ class ScheduleHelper {
     required int hour,
     required int minute,
     String? customApiKey,
+    int? wallpaperLocation,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(prefKeyIsAutoActive, isAutoActive);
@@ -533,6 +540,9 @@ class ScheduleHelper {
     await prefs.setInt(prefKeyScheduledMinute, minute);
     if (customApiKey != null) {
       await prefs.setString(prefKeyCustomApiKey, customApiKey);
+    }
+    if (wallpaperLocation != null) {
+      await prefs.setInt(prefKeyWallpaperLocation, wallpaperLocation);
     }
   }
 }
