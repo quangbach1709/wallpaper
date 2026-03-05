@@ -93,18 +93,23 @@ class WallpaperGalleryPage extends StatefulWidget {
 }
 
 class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
-  List<UnsplashImage> _images = [];
+  // ── State ────────────────────────────────────────────────────────────────
+  List<UnsplashImage> wallpapers = [];
+  int currentPage = 1;
   bool _isLoading = true;
+  bool isLoadingMore = false;
   bool _isProcessing = false;
   String? _error;
 
+  // ── Lifecycle ────────────────────────────────────────────────────────────
   @override
   void initState() {
     super.initState();
-    _fetchImages();
+    _fetchInitialImages();
     _initQuickActions();
   }
 
+  // ── Quick Actions ────────────────────────────────────────────────────────
   void _initQuickActions() {
     const quickActions = QuickActions();
 
@@ -137,19 +142,23 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     SystemNavigator.pop();
   }
 
-  Future<void> _fetchImages({bool forceRefresh = false}) async {
+  // ── Data Fetching ────────────────────────────────────────────────────────
+
+  /// Initial load (page 1, may serve from cache).
+  Future<void> _fetchInitialImages() async {
     setState(() {
       _isLoading = true;
       _error = null;
     });
 
     try {
-      final images = await WallpaperService.fetchTrendingWallpapers(
+      final images = await WallpaperService.fetchWallpapers(
+        page: 1,
         count: 30,
-        forceRefresh: forceRefresh,
       );
       setState(() {
-        _images = images;
+        wallpapers = images;
+        currentPage = 1;
         _isLoading = false;
       });
     } catch (e) {
@@ -160,18 +169,75 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     }
   }
 
-  /// Force refresh for pull-to-refresh
-  Future<void> _onRefresh() async {
-    await _fetchImages(forceRefresh: true);
+  /// Pull-to-refresh: reset to page 1, force a fresh network call.
+  Future<void> _handleRefresh() async {
+    setState(() {
+      currentPage = 1;
+      wallpapers = [];
+      _error = null;
+    });
+
+    try {
+      final images = await WallpaperService.fetchWallpapers(
+        page: 1,
+        count: 30,
+        forceRefresh: true,
+      );
+      setState(() {
+        wallpapers = images;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+      });
+    }
   }
 
-  /// Handle image tap: Navigate to detailed full-screen view
+  /// Load More: fetch the next page and append results.
+  Future<void> _handleLoadMore() async {
+    if (isLoadingMore) return;
+
+    setState(() {
+      isLoadingMore = true;
+    });
+
+    try {
+      currentPage++;
+      final newImages = await WallpaperService.fetchWallpapers(
+        page: currentPage,
+        count: 30,
+      );
+      setState(() {
+        wallpapers = [...wallpapers, ...newImages];
+        isLoadingMore = false;
+      });
+    } catch (e) {
+      // Roll back the page increment so a retry will request the same page.
+      currentPage--;
+      setState(() {
+        isLoadingMore = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load more: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  // ── Navigation ───────────────────────────────────────────────────────────
+
   void _handleImageTap(UnsplashImage image) {
     Navigator.push(
       context,
       MaterialPageRoute(builder: (context) => ImageDetailScreen(image: image)),
     );
   }
+
+  // ── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -225,7 +291,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
       );
     }
 
-    if (_error != null) {
+    if (_error != null && wallpapers.isEmpty) {
       return Center(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24.0),
@@ -250,7 +316,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
               ),
               const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: _fetchImages,
+                onPressed: _fetchInitialImages,
                 icon: const Icon(Icons.refresh),
                 label: const Text('Retry'),
               ),
@@ -263,6 +329,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // ── Header bar ──────────────────────────────────────────────────
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: Row(
@@ -286,7 +353,7 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      '${_images.length} Popular',
+                      '${wallpapers.length} Popular',
                       style: const TextStyle(
                         color: Color(0xFF6366F1),
                         fontSize: 13,
@@ -304,24 +371,64 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             ],
           ),
         ),
+
+        // ── Gallery + Load More ──────────────────────────────────────────
         Expanded(
           child: RefreshIndicator(
-            onRefresh: _onRefresh,
+            onRefresh: _handleRefresh,
             color: const Color(0xFF6366F1),
             backgroundColor: const Color(0xFF1A1A3E),
-            child: GridView.builder(
+            child: CustomScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 10,
-                childAspectRatio: 0.6, // Portrait aspect ratio for tall images
-              ),
-              itemCount: _images.length,
-              itemBuilder: (context, index) {
-                return _buildImageCard(_images[index]);
-              },
+              slivers: [
+                // Grid of wallpaper cards
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  sliver: SliverGrid(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                      childAspectRatio: 0.6,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) => _buildImageCard(wallpapers[index]),
+                      childCount: wallpapers.length,
+                    ),
+                  ),
+                ),
+
+                // Load More footer
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 24,
+                      horizontal: 48,
+                    ),
+                    child: isLoadingMore
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              color: Color(0xFF6366F1),
+                            ),
+                          )
+                        : ElevatedButton.icon(
+                            onPressed: _handleLoadMore,
+                            icon: const Icon(Icons.expand_more_rounded),
+                            label: const Text('Load More Wallpapers'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF6366F1),
+                              foregroundColor: Colors.white,
+                              minimumSize: const Size.fromHeight(48),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -349,10 +456,10 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
             fit: StackFit.expand,
             children: [
               CachedNetworkImage(
-                imageUrl: image.regularUrl, // Use regular for better quality
+                imageUrl: image.regularUrl,
                 cacheManager: WallpaperCacheManager.instance,
                 fit: BoxFit.cover,
-                memCacheWidth: 500, // Limit memory usage for 2-column grid
+                memCacheWidth: 500,
                 placeholder: (context, url) => Container(
                   color: Colors.grey[900],
                   child: const Center(

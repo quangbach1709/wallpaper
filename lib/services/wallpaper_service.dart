@@ -136,7 +136,9 @@ class WallpaperService {
     return difference.inMinutes < cacheDurationMinutes;
   }
 
-  /// Get cached wallpapers from SharedPreferences
+  /// Get cached wallpapers from SharedPreferences.
+  /// Applies the portrait ratio filter on read so that any stale cache entries
+  /// that were saved before the filter was introduced are cleaned up on the fly.
   static Future<List<UnsplashImage>?> _getCachedWallpapers() async {
     final prefs = await SharedPreferences.getInstance();
     final cachedJson = prefs.getString(prefKeyCachedWallpapers);
@@ -144,29 +146,50 @@ class WallpaperService {
 
     try {
       final List<dynamic> data = json.decode(cachedJson);
-      return data.map((json) => UnsplashImage.fromJson(json)).toList();
+      // Re-apply the portrait filter so landscape images never slip through,
+      // even if older cache entries were saved without filtering.
+      final filtered = data.where((img) {
+        final double h = (img['height'] as num).toDouble();
+        final double w = (img['width'] as num).toDouble();
+        return w > 0 && (h / w) > 1.2;
+      }).toList();
+      return filtered.map((j) => UnsplashImage.fromJson(j)).toList();
     } catch (e) {
       return null;
     }
   }
 
-  /// Save wallpapers to cache
-  static Future<void> _cacheWallpapers(String jsonResponse) async {
+  /// Save **already-filtered** wallpapers to cache.
+  /// Accepts the filtered list (not the raw API response) so the cache never
+  /// contains landscape images.
+  static Future<void> _cacheFilteredWallpapers(
+    List<dynamic> filteredData,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(prefKeyCachedWallpapers, jsonResponse);
+    await prefs.setString(prefKeyCachedWallpapers, json.encode(filteredData));
     await prefs.setString(
       prefKeyCachedTimestamp,
       DateTime.now().toIso8601String(),
     );
   }
 
-  /// Fetches trending portrait wallpapers for the gallery
-  static Future<List<UnsplashImage>> fetchTrendingWallpapers({
+  /// Fetches trending portrait wallpapers for the gallery.
+  ///
+  /// - [page] controls which page of results to request from the Unsplash API.
+  /// - [forceRefresh] bypasses the local cache when `true`.
+  ///
+  /// Caching rules:
+  ///   - page == 1 && !forceRefresh  → serve from cache when valid.
+  ///   - page == 1 &&  forceRefresh  → fetch from API and overwrite cache.
+  ///   - page  > 1                   → always fetch from API; never touch the
+  ///                                   page-1 cache so it stays intact.
+  static Future<List<UnsplashImage>> fetchWallpapers({
+    int page = 1,
     int count = 30,
     bool forceRefresh = false,
   }) async {
-    // Check cache (unless force refresh)
-    if (!forceRefresh) {
+    // Only consult the cache for page 1 (and only when not forced).
+    if (page == 1 && !forceRefresh) {
       final isValid = await _isCacheValid();
       if (isValid) {
         final cached = await _getCachedWallpapers();
@@ -184,13 +207,13 @@ class WallpaperService {
           'per_page': count.toString(),
           'order_by': 'popular',
           'orientation': 'portrait',
+          'page': page.toString(),
         },
       );
 
       final response = await http.get(uri, headers: headers);
 
       if (response.statusCode == 200) {
-        await _cacheWallpapers(response.body);
         final List<dynamic> data = json.decode(response.body);
 
         // Filter: Keep only TALL images (ratio > 1.2)
@@ -198,8 +221,14 @@ class WallpaperService {
         final filteredList = data.where((img) {
           final double h = (img['height'] as num).toDouble();
           final double w = (img['width'] as num).toDouble();
-          return (h / w) > 1.2;
+          return w > 0 && (h / w) > 1.2;
         }).toList();
+
+        // Only overwrite the persistent cache for page 1 results,
+        // and save the *filtered* list so landscape images are never cached.
+        if (page == 1) {
+          await _cacheFilteredWallpapers(filteredList);
+        }
 
         return filteredList
             .map((json) => UnsplashImage.fromJson(json))
@@ -208,14 +237,22 @@ class WallpaperService {
         throw Exception('Failed: ${response.statusCode} - ${response.body}');
       }
     } catch (e) {
-      // Fallback to cache on error
-      final cached = await _getCachedWallpapers();
-      if (cached != null && cached.isNotEmpty) {
-        return cached;
+      // Fallback to cache only on page 1 errors.
+      if (page == 1) {
+        final cached = await _getCachedWallpapers();
+        if (cached != null && cached.isNotEmpty) {
+          return cached;
+        }
       }
       throw Exception('Error fetching wallpapers: $e');
     }
   }
+
+  /// Kept for backwards-compatibility. Delegates to [fetchWallpapers].
+  static Future<List<UnsplashImage>> fetchTrendingWallpapers({
+    int count = 30,
+    bool forceRefresh = false,
+  }) => fetchWallpapers(page: 1, count: count, forceRefresh: forceRefresh);
 
   /// Get list of wallpaper IDs that have been used recently
   static Future<List<String>> _getWallpaperHistory() async {
