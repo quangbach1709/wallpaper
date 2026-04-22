@@ -131,15 +131,18 @@ class _WallpaperGalleryPageState extends State<WallpaperGalleryPage> {
   }
 
   Future<void> _handleQuickActionChangeWallpaper() async {
-    // Register a one-off background task
-    await Workmanager().registerOneOffTask(
-      forceUpdateTaskId,
-      forceUpdateTaskName,
-      constraints: Constraints(networkType: NetworkType.connected),
-    );
-
-    // Close the app immediately - "Hit and Run"
-    SystemNavigator.pop();
+    // Show a basic toast-like feedback if possible, but since we want "Hit and Run", 
+    // we'll just perform the action directly.
+    try {
+      // Execute the task logic directly instead of scheduling it
+      // This ensures it happens RIGHT NOW because the user requested it.
+      await WallpaperService.executeBackgroundTask();
+    } catch (e) {
+      // If it fails, we at least tried
+    } finally {
+      // Close the app immediately after the task is DONE
+      SystemNavigator.pop();
+    }
   }
 
   // ── Data Fetching ────────────────────────────────────────────────────────

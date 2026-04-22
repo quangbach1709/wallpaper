@@ -260,7 +260,9 @@ class WallpaperService {
         case WallpaperLocation.lockScreen:
           return await wm.setWallpaper(file, WallpaperManagerFlutter.lockScreen);
         case WallpaperLocation.both:
+          // Setting both sequentially with a small delay can help the system process changes better in background
           final h = await wm.setWallpaper(file, WallpaperManagerFlutter.homeScreen);
+          await Future.delayed(const Duration(milliseconds: 500));
           final l = await wm.setWallpaper(file, WallpaperManagerFlutter.lockScreen);
           return h && l;
       }
@@ -286,7 +288,9 @@ class WallpaperService {
       final prefs = await SharedPreferences.getInstance();
       final locInt = prefs.getInt(prefKeyWallpaperLocation) ?? 3;
       final location = locInt == 1 ? WallpaperLocation.homeScreen : locInt == 2 ? WallpaperLocation.lockScreen : WallpaperLocation.both;
-      final success = await setWallpaperFromUrl(image.fullUrl, location: location);
+      
+      // Use regularUrl for background tasks to ensure system has enough memory to update all UI caches (like folder blur)
+      final success = await setWallpaperFromUrl(image.regularUrl, location: location);
       if (success) await NotificationHelper.showWallpaperUpdated();
       return true;
     } catch (e) {
